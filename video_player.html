@@ -1,0 +1,992 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="theme-color" content="#000000">
+    <title>视频播放器</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        html, body {
+            width: 100%;
+            height: 100%;
+            background: #000;
+            overflow: hidden;
+            font-family: -apple-system, 'PingFang SC', 'Helvetica Neue', Arial, sans-serif;
+            overscroll-behavior: none;
+        }
+
+        /* ── 播放器主容器 ── */
+        #playerContainer {
+            position: fixed;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #000;
+            touch-action: none;
+        }
+
+        /* ── 视频元素 ── */
+        #videoPlayer {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            background: #000;
+        }
+
+        /* ── 顶部状态栏 ── */
+        #topBar {
+            position: fixed;
+            top: 0; left: 0; right: 0;
+            padding: env(safe-area-inset-top, 12px) 16px 20px;
+            padding-top: max(env(safe-area-inset-top), 12px);
+            background: linear-gradient(to bottom, rgba(0,0,0,.8) 0%, transparent 100%);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            transition: opacity .35s ease;
+            z-index: 20;
+        }
+        #topBar.hidden { opacity: 0; pointer-events: none; }
+
+        #videoCounter {
+            color: rgba(255,255,255,.6);
+            font-size: 12px;
+            white-space: nowrap;
+            flex-shrink: 0;
+        }
+        #videoTitle {
+            color: #fff;
+            font-size: 13px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            flex: 1;
+        }
+
+        /* ── 底部控制栏 ── */
+        #controls {
+            position: fixed;
+            bottom: 0; left: 0; right: 0;
+            padding: 30px 16px max(env(safe-area-inset-bottom), 16px);
+            background: linear-gradient(to top, rgba(0,0,0,.9) 0%, transparent 100%);
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            transition: opacity .35s ease;
+            z-index: 20;
+        }
+        #controls.hidden { opacity: 0; pointer-events: none; }
+
+        /* 时间显示 */
+        #timeRow {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0 2px;
+        }
+        #timeRow span {
+            color: rgba(255,255,255,.7);
+            font-size: 11px;
+            font-variant-numeric: tabular-nums;
+        }
+
+        /* 进度条 */
+        #progressWrap {
+            width: 100%;
+            height: 18px;         /* 增大触摸热区 */
+            display: flex;
+            align-items: center;
+            cursor: pointer;
+            position: relative;
+        }
+        #progressTrack {
+            width: 100%;
+            height: 3px;
+            background: rgba(255,255,255,.25);
+            border-radius: 3px;
+            overflow: hidden;
+            transition: height .15s ease;
+        }
+        #progressWrap:active #progressTrack,
+        #progressWrap.dragging #progressTrack { height: 5px; }
+        #progressBar {
+            height: 100%;
+            background: #fff;
+            border-radius: 3px;
+            width: 0%;
+            pointer-events: none;
+            will-change: width;
+        }
+        /* 进度拖拽点 */
+        #progressThumb {
+            position: absolute;
+            width: 14px;
+            height: 14px;
+            background: #fff;
+            border-radius: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%) scale(0);
+            transition: transform .15s ease;
+            pointer-events: none;
+            box-shadow: 0 1px 4px rgba(0,0,0,.5);
+        }
+        #progressWrap:active #progressThumb,
+        #progressWrap.dragging #progressThumb { transform: translate(-50%, -50%) scale(1); }
+
+        /* 按钮行 */
+        #btnRow {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+
+        .ctrl-btn {
+            background: rgba(255,255,255,.18);
+            color: #fff;
+            border: 1px solid rgba(255,255,255,.28);
+            padding: 9px 14px;
+            border-radius: 20px;
+            cursor: pointer;
+            font-size: 13px;
+            white-space: nowrap;
+            transition: background .15s, transform .1s;
+            -webkit-appearance: none;
+            user-select: none;
+        }
+        .ctrl-btn:active {
+            background: rgba(255,255,255,.35);
+            transform: scale(0.95);
+        }
+        .ctrl-btn.primary {
+            background: rgba(255,255,255,.85);
+            color: #000;
+            border-color: transparent;
+            font-weight: 600;
+        }
+        #playPauseBtn { min-width: 42px; text-align: center; font-size: 16px; }
+        #muteBtn { min-width: 42px; text-align: center; }
+        #spacer { flex: 1; }
+
+        /* ── 中央播放/暂停提示 ── */
+        #playIndicator {
+            position: fixed;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            pointer-events: none;
+            z-index: 25;
+        }
+        #playIndicatorIcon {
+            font-size: 60px;
+            opacity: 0;
+            transform: scale(0.8);
+            transition: none;
+            filter: drop-shadow(0 2px 8px rgba(0,0,0,.5));
+        }
+        #playIndicatorIcon.show {
+            animation: pulseIcon .5s ease forwards;
+        }
+        @keyframes pulseIcon {
+            0%   { opacity: .9; transform: scale(1); }
+            60%  { opacity: .9; transform: scale(1.15); }
+            100% { opacity: 0;  transform: scale(1.3); }
+        }
+
+        /* ── 欢迎空状态 ── */
+        #emptyState {
+            position: fixed;
+            inset: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 20px;
+            z-index: 30;
+            background: #000;
+        }
+        #emptyState .icon {
+            font-size: 72px;
+            opacity: .4;
+        }
+        #emptyState h2 {
+            color: rgba(255,255,255,.75);
+            font-size: 18px;
+            font-weight: 500;
+        }
+        #emptyState p {
+            color: rgba(255,255,255,.4);
+            font-size: 13px;
+            text-align: center;
+            line-height: 1.6;
+            max-width: 260px;
+        }
+        #emptyBtnRow {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+
+        /* ── NAS 弹窗 ── */
+        #nasModal {
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,.7);
+            z-index: 50;
+            display: flex;
+            align-items: flex-end;
+            justify-content: center;
+        }
+        #nasModal.hidden { display: none; }
+        #nasPanel {
+            background: #1c1c1e;
+            border-radius: 18px 18px 0 0;
+            padding: 20px 20px max(env(safe-area-inset-bottom), 36px);
+            width: 100%;
+            max-width: 500px;
+        }
+        #nasPanel h3 {
+            color: #fff;
+            font-size: 16px;
+            margin-bottom: 14px;
+            text-align: center;
+        }
+        .nas-field { margin-bottom: 10px; }
+        .nas-field label {
+            color: rgba(255,255,255,.55);
+            font-size: 12px;
+            display: block;
+            margin-bottom: 4px;
+            padding-left: 2px;
+        }
+        .nas-field input, .nas-field textarea {
+            width: 100%;
+            padding: 11px 14px;
+            background: rgba(255,255,255,.1);
+            border: 1px solid rgba(255,255,255,.2);
+            border-radius: 10px;
+            color: #fff;
+            font-size: 15px;
+            outline: none;
+            -webkit-appearance: none;
+            font-family: inherit;
+        }
+        .nas-field input::placeholder,
+        .nas-field textarea::placeholder { color: rgba(255,255,255,.3); }
+        .nas-field textarea { resize: none; line-height: 1.6; }
+        #nasBtnRow {
+            display: flex;
+            gap: 10px;
+            margin-top: 14px;
+        }
+        #nasBtnRow button {
+            flex: 1;
+            padding: 13px;
+            border-radius: 12px;
+            font-size: 15px;
+            cursor: pointer;
+            border: none;
+            font-weight: 600;
+        }
+        #nasCancel { background: rgba(255,255,255,.12); color: #fff; }
+        #nasConfirm { background: #fff; color: #000; }
+
+        /* ── 错误提示 ── */
+        #errorToast {
+            position: fixed;
+            bottom: 100px;
+            left: 50%;
+            transform: translateX(-50%) translateY(20px);
+            background: rgba(220, 60, 60, .9);
+            color: #fff;
+            padding: 10px 18px;
+            border-radius: 20px;
+            font-size: 13px;
+            z-index: 60;
+            opacity: 0;
+            transition: opacity .3s, transform .3s;
+            white-space: nowrap;
+            max-width: 80vw;
+            text-align: center;
+        }
+        #errorToast.show {
+            opacity: 1;
+            transform: translateX(-50%) translateY(0);
+        }
+
+        /* ── 加载指示器 ── */
+        #loadingIndicator {
+            position: fixed;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            pointer-events: none;
+            z-index: 22;
+            opacity: 0;
+            transition: opacity .3s;
+        }
+        #loadingIndicator.show { opacity: 1; }
+        .spinner {
+            width: 40px;
+            height: 40px;
+            border: 3px solid rgba(255,255,255,.2);
+            border-top-color: rgba(255,255,255,.8);
+            border-radius: 50%;
+            animation: spin .8s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* ── 切换动画 ── */
+        #videoPlayer.slide-up {
+            animation: slideUp .28s cubic-bezier(.4,0,.2,1) forwards;
+        }
+        #videoPlayer.slide-down {
+            animation: slideDown .28s cubic-bezier(.4,0,.2,1) forwards;
+        }
+        @keyframes slideUp {
+            from { transform: translateY(0); opacity: 1; }
+            to   { transform: translateY(-25%); opacity: 0; }
+        }
+        @keyframes slideDown {
+            from { transform: translateY(0); opacity: 1; }
+            to   { transform: translateY(25%); opacity: 0; }
+        }
+
+        /* 隐藏系统文件输入 */
+        #fileInput { display: none; }
+    </style>
+</head>
+<body>
+
+<!-- 视频容器 -->
+<div id="playerContainer">
+    <video id="videoPlayer" playsinline preload="metadata"></video>
+</div>
+
+<!-- 顶部信息栏 -->
+<div id="topBar" class="hidden">
+    <span id="videoCounter">0/0</span>
+    <span id="videoTitle">未选择视频</span>
+</div>
+
+<!-- 底部控制栏 -->
+<div id="controls" class="hidden">
+    <div id="progressWrap">
+        <div id="progressTrack">
+            <div id="progressBar"></div>
+        </div>
+        <div id="progressThumb"></div>
+    </div>
+    <div id="timeRow">
+        <span id="currentTime">0:00</span>
+        <span id="totalTime">0:00</span>
+    </div>
+    <div id="btnRow">
+        <button class="ctrl-btn primary" id="folderBtn">📁 本地文件夹</button>
+        <button class="ctrl-btn" id="nasBtn">🌐 局域网/NAS</button>
+        <span id="spacer"></span>
+        <button class="ctrl-btn" id="playPauseBtn">⏸</button>
+        <button class="ctrl-btn" id="muteBtn">🔇</button>
+    </div>
+</div>
+
+<!-- 中央播放/暂停反馈 -->
+<div id="playIndicator">
+    <div id="playIndicatorIcon"></div>
+</div>
+
+<!-- 加载指示器 -->
+<div id="loadingIndicator">
+    <div class="spinner"></div>
+</div>
+
+<!-- 空状态引导 -->
+<div id="emptyState">
+    <div class="icon">🎬</div>
+    <h2>视频播放器</h2>
+    <p>选择本地视频文件夹，或输入局域网 / NAS 视频地址开始播放</p>
+    <p style="color:rgba(255,255,255,.3);font-size:12px;">支持 MP4 · MKV · MOV · WebM<br>上划切换下一个 · 下划切换上一个</p>
+    <div id="emptyBtnRow">
+        <button class="ctrl-btn primary" id="emptyFolderBtn">📁 选择本地视频</button>
+        <button class="ctrl-btn" id="emptyNasBtn">🌐 局域网/NAS</button>
+    </div>
+</div>
+
+<!-- NAS 地址输入弹窗 -->
+<div id="nasModal" class="hidden">
+    <div id="nasPanel">
+        <h3>局域网 / NAS 视频</h3>
+
+        <div class="nas-field">
+            <label>视频直链地址（单个文件）</label>
+            <input id="nasUrl" type="url" placeholder="http://192.168.1.100:8096/video.mp4" autocomplete="off" autocorrect="off" spellcheck="false">
+        </div>
+
+        <div class="nas-field">
+            <label>多视频 — 每行输入一个 URL</label>
+            <textarea id="nasUrls" rows="4"
+                placeholder="http://192.168.1.100/v1.mp4&#10;http://192.168.1.100/v2.mp4&#10;http://nas.local/movies/film.mkv"
+                autocorrect="off" spellcheck="false"></textarea>
+        </div>
+
+        <div class="nas-field">
+            <label>💡 支持：Emby/Jellyfin 直链、HTTP 文件服务器、群晖 Web Station</label>
+        </div>
+
+        <div id="nasBtnRow">
+            <button id="nasCancel">取消</button>
+            <button id="nasConfirm">播放</button>
+        </div>
+    </div>
+</div>
+
+<!-- 隐藏文件选择器（多选视频文件） -->
+<input type="file" id="fileInput" accept="video/*" multiple>
+
+<!-- 错误提示条 -->
+<div id="errorToast"></div>
+
+<script>
+'use strict';
+
+/* ═══════════════════════════════════════════════════════════
+   VideoPlayer v2.0
+   ─ 修复 / 增强项：
+   1. 静音状态独立管理，不随 play 事件强制变更
+   2. 进度条支持触摸拖拽（touchstart/touchmove/touchend）
+   3. 防止滑动切换误触 click 事件显示控制栏
+   4. 新增播放/暂停按钮 + 中央动效反馈
+   5. 新增时间显示（当前/总时长）
+   6. 新增视频加载中旋转指示器
+   7. 新增 error 事件处理 + Toast 错误提示
+   8. 双击左右区域快进/快退 10 秒
+   9. 支持 AndroidBridge 注入（原生 Android 版本感知）
+   10. 文件选择改为多文件模式（兼容 Android WebView）
+═══════════════════════════════════════════════════════════ */
+
+class VideoPlayer {
+    constructor() {
+        // DOM 引用
+        this.$video         = document.getElementById('videoPlayer');
+        this.$container     = document.getElementById('playerContainer');
+        this.$topBar        = document.getElementById('topBar');
+        this.$controls      = document.getElementById('controls');
+        this.$counter       = document.getElementById('videoCounter');
+        this.$title         = document.getElementById('videoTitle');
+        this.$progress      = document.getElementById('progressBar');
+        this.$progressWrap  = document.getElementById('progressWrap');
+        this.$progressThumb = document.getElementById('progressThumb');
+        this.$currentTime   = document.getElementById('currentTime');
+        this.$totalTime     = document.getElementById('totalTime');
+        this.$muteBtn       = document.getElementById('muteBtn');
+        this.$playPauseBtn  = document.getElementById('playPauseBtn');
+        this.$emptyState    = document.getElementById('emptyState');
+        this.$nasModal      = document.getElementById('nasModal');
+        this.$fileInput     = document.getElementById('fileInput');
+        this.$loading       = document.getElementById('loadingIndicator');
+        this.$indicatorIcon = document.getElementById('playIndicatorIcon');
+        this.$errorToast    = document.getElementById('errorToast');
+
+        // 状态
+        this.videos          = [];     // [{name, url, file, isBlob}]
+        this.currentIdx      = 0;
+        this.isMuted         = true;   // 初始静音保证 autoplay 成功
+        this.isPaused        = false;
+        this.controlsTimer   = null;
+        this.currentBlobUrl  = null;
+        this.errorToastTimer = null;
+        this.isAnimating     = false;  // 防止动画期间重复切换
+
+        // 触摸状态
+        this.touchStartY    = 0;
+        this.touchStartX    = 0;
+        this.touchStartTime = 0;
+        this.didSwipe       = false;   // 标记本次 touch 是否触发了滑动
+
+        // 进度条拖拽状态
+        this.isDraggingProgress = false;
+
+        // 双击检测
+        this.lastTapTime = 0;
+        this.lastTapX    = 0;
+
+        this._bindEvents();
+    }
+
+    /* ═══════════════════ 事件绑定 ═══════════════════ */
+    _bindEvents() {
+        // 文件夹 / 文件选择按钮
+        const openFile = () => this.$fileInput.click();
+        document.getElementById('folderBtn').addEventListener('click', openFile);
+        document.getElementById('emptyFolderBtn').addEventListener('click', openFile);
+        this.$fileInput.addEventListener('change', e => this._loadLocalFiles(e));
+
+        // NAS 按钮
+        document.getElementById('nasBtn').addEventListener('click', () => this._openNasModal());
+        document.getElementById('emptyNasBtn').addEventListener('click', () => this._openNasModal());
+        document.getElementById('nasCancel').addEventListener('click', () => this._closeNasModal());
+        document.getElementById('nasConfirm').addEventListener('click', () => this._confirmNas());
+
+        // 播放/暂停
+        this.$playPauseBtn.addEventListener('click', e => {
+            e.stopPropagation();
+            this._togglePlayPause();
+        });
+
+        // 静音切换
+        this.$muteBtn.addEventListener('click', e => {
+            e.stopPropagation();
+            this._toggleMute();
+        });
+
+        // 进度条 — 点击 & 触摸拖拽
+        this._bindProgressEvents();
+
+        // 视频原生事件
+        this.$video.addEventListener('timeupdate',  () => this._updateProgress());
+        this.$video.addEventListener('loadedmetadata', () => this._onMetadata());
+        this.$video.addEventListener('ended',       () => this._playNext());
+        this.$video.addEventListener('waiting',     () => this._showLoading(true));
+        this.$video.addEventListener('canplay',     () => this._showLoading(false));
+        this.$video.addEventListener('playing',     () => {
+            this._showLoading(false);
+            this.isPaused = false;
+            this._updatePlayPauseBtn();
+        });
+        this.$video.addEventListener('pause',       () => {
+            this.isPaused = true;
+            this._updatePlayPauseBtn();
+        });
+        this.$video.addEventListener('error',       () => this._onVideoError());
+
+        // 触摸手势（容器）
+        this.$container.addEventListener('touchstart', e => this._onTouchStart(e), { passive: true });
+        this.$container.addEventListener('touchend',   e => this._onTouchEnd(e),   { passive: true });
+
+        // 单击容器 → 显示控制栏 / 播放暂停（区分滑动）
+        this.$container.addEventListener('click', e => {
+            if (this.didSwipe) { this.didSwipe = false; return; }
+            this._handleTap(e);
+        });
+
+        // NAS 弹窗防穿透
+        this.$nasModal.addEventListener('touchmove', e => e.preventDefault(), { passive: false });
+
+        // 键盘快捷键（外接键盘）
+        document.addEventListener('keydown', e => this._onKeyDown(e));
+    }
+
+    /* ─── 进度条事件（click + touch drag） ─── */
+    _bindProgressEvents() {
+        // 鼠标点击
+        this.$progressWrap.addEventListener('click', e => {
+            if (!this.isDraggingProgress) this._seekByRatio(this._getRatioFromEvent(e));
+        });
+
+        // 触摸拖拽
+        this.$progressWrap.addEventListener('touchstart', e => {
+            e.stopPropagation();  // 不触发容器的滑动切换
+            this.isDraggingProgress = true;
+            this.$progressWrap.classList.add('dragging');
+            this._seekByRatio(this._getRatioFromTouch(e.touches[0]));
+            this._clearControlsTimer();  // 拖拽期间不自动隐藏
+        }, { passive: true });
+
+        this.$progressWrap.addEventListener('touchmove', e => {
+            if (!this.isDraggingProgress) return;
+            e.stopPropagation();
+            this._seekByRatio(this._getRatioFromTouch(e.touches[0]));
+        }, { passive: true });
+
+        this.$progressWrap.addEventListener('touchend', () => {
+            this.isDraggingProgress = false;
+            this.$progressWrap.classList.remove('dragging');
+            this._showControls();
+        });
+    }
+
+    _getRatioFromEvent(e) {
+        const rect = this.$progressWrap.getBoundingClientRect();
+        return Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    }
+    _getRatioFromTouch(touch) {
+        const rect = this.$progressWrap.getBoundingClientRect();
+        return Math.max(0, Math.min(1, (touch.clientX - rect.left) / rect.width));
+    }
+    _seekByRatio(ratio) {
+        if (!this.$video.duration) return;
+        this.$video.currentTime = ratio * this.$video.duration;
+        // 立即更新 UI，不等 timeupdate
+        this._setProgressUI(ratio);
+    }
+    _setProgressUI(ratio) {
+        const pct = (ratio * 100).toFixed(2) + '%';
+        this.$progress.style.width = pct;
+        this.$progressThumb.style.left = pct;
+    }
+
+    /* ═══════════════════ 加载本地文件 ═══════════════════ */
+    _loadLocalFiles(e) {
+        const SUPPORTED = ['.mp4', '.m4v', '.mov', '.mkv', '.webm', '.3gp', '.ts', '.m3u8', '.avi', '.wmv'];
+        const files = Array.from(e.target.files).filter(f => {
+            const ext = (f.name.match(/\.\w+$/) || [''])[0].toLowerCase();
+            return SUPPORTED.includes(ext);
+        });
+
+        // 重置 input，允许重复选同一路径
+        e.target.value = '';
+
+        if (!files.length) {
+            this._showError('未找到支持的视频文件\n支持：MP4、MKV、MOV、WebM、3GP 等');
+            return;
+        }
+
+        // 按文件名自然排序（支持中文数字混排）
+        files.sort((a, b) => a.name.localeCompare(b.name, 'zh-CN', { numeric: true, sensitivity: 'base' }));
+
+        this._setPlaylist(files.map(f => ({
+            name: f.name,
+            file: f,
+            isBlob: true
+        })));
+        this._playAt(0);
+    }
+
+    /* ═══════════════════ 播放列表管理 ═══════════════════ */
+    _setPlaylist(items) {
+        this._revokeCurrentBlob();
+        this.videos = items;
+        this.currentIdx = 0;
+    }
+
+    _playAt(idx, direction = 'down') {
+        if (!this.videos.length || this.isAnimating) return;
+        idx = ((idx % this.videos.length) + this.videos.length) % this.videos.length;
+
+        if (this.videos.length > 1) {
+            this.isAnimating = true;
+            const cls = direction === 'down' ? 'slide-up' : 'slide-down';
+            this.$video.classList.add(cls);
+            setTimeout(() => {
+                this.$video.classList.remove(cls);
+                this.isAnimating = false;
+                this._doPlay(this.videos[idx], idx);
+            }, 260);
+        } else {
+            this._doPlay(this.videos[idx], idx);
+        }
+    }
+
+    _doPlay(item, idx) {
+        this._revokeCurrentBlob();
+        this._showLoading(true);
+
+        let url;
+        if (item.isBlob) {
+            url = URL.createObjectURL(item.file);
+            this.currentBlobUrl = url;
+        } else {
+            url = item.url;
+            this.currentBlobUrl = null;
+        }
+
+        this.currentIdx = idx;
+        this.$video.src = url;
+        this.$video.muted = this.isMuted;
+        this.$video.load();
+
+        this.$video.play().catch(err => {
+            // NotAllowedError 通常是自动播放限制，静默处理，等用户点击
+            if (err.name !== 'NotAllowedError') {
+                this._showError('播放失败：' + err.message);
+            }
+            this._showControls(6000);
+        });
+
+        this._updateUI();
+        this._hideEmptyState();
+        this._showControls();
+    }
+
+    _revokeCurrentBlob() {
+        if (this.currentBlobUrl) {
+            URL.revokeObjectURL(this.currentBlobUrl);
+            this.currentBlobUrl = null;
+        }
+    }
+
+    /* ═══════════════════ 上 / 下一个 ═══════════════════ */
+    _playNext() {
+        if (this.videos.length > 1) this._playAt(this.currentIdx + 1, 'down');
+        else if (this.videos.length === 1) {
+            // 单视频循环
+            this.$video.currentTime = 0;
+            this.$video.play().catch(() => {});
+        }
+    }
+    _playPrev() {
+        if (this.videos.length > 1) this._playAt(this.currentIdx - 1, 'up');
+    }
+
+    /* ═══════════════════ 触摸手势 ═══════════════════ */
+    _onTouchStart(e) {
+        // 进度条区域由自己处理，不触发切换
+        if (e.target.closest('#progressWrap')) return;
+        this.touchStartY    = e.touches[0].clientY;
+        this.touchStartX    = e.touches[0].clientX;
+        this.touchStartTime = Date.now();
+        this.didSwipe       = false;
+    }
+
+    _onTouchEnd(e) {
+        if (e.target.closest('#progressWrap')) return;
+
+        const dy = this.touchStartY - e.changedTouches[0].clientY;
+        const dx = this.touchStartX - e.changedTouches[0].clientX;
+        const dt = Date.now() - this.touchStartTime;
+
+        const SWIPE_PX = 55;
+        const SWIPE_MS = 500;
+
+        if (Math.abs(dy) >= SWIPE_PX && Math.abs(dy) > Math.abs(dx) * 1.2 && dt <= SWIPE_MS) {
+            this.didSwipe = true;
+            if (dy > 0) this._playNext();
+            else        this._playPrev();
+        }
+    }
+
+    /* ═══════════════════ 点击处理（单击/双击区分） ═══════════════════ */
+    _handleTap(e) {
+        // 点击控制栏元素不触发
+        if (e.target.closest('#controls') || e.target.closest('#topBar')) {
+            return;
+        }
+
+        const now = Date.now();
+        const x   = e.clientX;
+        const dt  = now - this.lastTapTime;
+        const dx  = Math.abs(x - this.lastTapX);
+
+        if (dt < 300 && dx < 60) {
+            // 双击：左 1/3 快退，右 1/3 快进，中间切换播放/暂停
+            const w = window.innerWidth;
+            if (x < w / 3) {
+                this._seek(-10);
+                this._showIndicator('⏪ 10s');
+            } else if (x > w * 2 / 3) {
+                this._seek(10);
+                this._showIndicator('⏩ 10s');
+            } else {
+                this._togglePlayPause();
+            }
+            this.lastTapTime = 0;
+        } else {
+            // 单击：显示控制栏
+            this.lastTapTime = now;
+            this.lastTapX    = x;
+            this._showControls();
+        }
+    }
+
+    _seek(seconds) {
+        if (this.$video.duration) {
+            this.$video.currentTime = Math.max(0, Math.min(this.$video.duration, this.$video.currentTime + seconds));
+        }
+    }
+
+    /* ═══════════════════ 键盘快捷键 ═══════════════════ */
+    _onKeyDown(e) {
+        switch (e.key) {
+            case ' ':          e.preventDefault(); this._togglePlayPause(); break;
+            case 'ArrowRight': e.preventDefault(); this._seek(10);  this._showIndicator('⏩ 10s'); break;
+            case 'ArrowLeft':  e.preventDefault(); this._seek(-10); this._showIndicator('⏪ 10s'); break;
+            case 'ArrowDown':  e.preventDefault(); this._playNext(); break;
+            case 'ArrowUp':    e.preventDefault(); this._playPrev(); break;
+            case 'm':          this._toggleMute(); break;
+        }
+    }
+
+    /* ═══════════════════ 播放 / 暂停 ═══════════════════ */
+    _togglePlayPause() {
+        if (!this.videos.length) return;
+        if (this.$video.paused) {
+            this.$video.play().catch(() => {});
+            this._showIndicator('▶');
+        } else {
+            this.$video.pause();
+            this._showIndicator('⏸');
+            this._showControls(4000);
+        }
+    }
+    _updatePlayPauseBtn() {
+        this.$playPauseBtn.textContent = this.isPaused ? '▶' : '⏸';
+    }
+
+    /* ═══════════════════ 静音 ═══════════════════ */
+    _toggleMute() {
+        this.isMuted = !this.isMuted;
+        this.$video.muted = this.isMuted;
+        this._updateMuteBtn();
+    }
+    _updateMuteBtn() {
+        this.$muteBtn.textContent = this.isMuted ? '🔇' : '🔊';
+    }
+
+    /* ═══════════════════ 进度更新 ═══════════════════ */
+    _updateProgress() {
+        const { currentTime, duration } = this.$video;
+        if (duration > 0 && !this.isDraggingProgress) {
+            this._setProgressUI(currentTime / duration);
+        }
+        this.$currentTime.textContent = this._formatTime(currentTime);
+    }
+    _onMetadata() {
+        this.$totalTime.textContent = this._formatTime(this.$video.duration);
+    }
+    _formatTime(sec) {
+        if (!isFinite(sec)) return '0:00';
+        const m = Math.floor(sec / 60);
+        const s = Math.floor(sec % 60);
+        return `${m}:${s.toString().padStart(2, '0')}`;
+    }
+
+    /* ═══════════════════ 错误处理 ═══════════════════ */
+    _onVideoError() {
+        this._showLoading(false);
+        const err = this.$video.error;
+        let msg = '视频加载失败';
+        if (err) {
+            const codes = {1:'用户中断',2:'网络错误',3:'解码失败',4:'格式不支持'};
+            msg = codes[err.code] || msg;
+        }
+        this._showError(msg);
+        // 自动跳到下一个（3 秒后）
+        if (this.videos.length > 1) {
+            setTimeout(() => this._playNext(), 3000);
+        }
+    }
+    _showError(msg) {
+        clearTimeout(this.errorToastTimer);
+        this.$errorToast.textContent = msg;
+        this.$errorToast.classList.add('show');
+        this.errorToastTimer = setTimeout(() => {
+            this.$errorToast.classList.remove('show');
+        }, 4000);
+    }
+
+    /* ═══════════════════ 加载指示器 ═══════════════════ */
+    _showLoading(show) {
+        this.$loading.classList.toggle('show', show);
+    }
+
+    /* ═══════════════════ 中央动效指示器 ═══════════════════ */
+    _showIndicator(icon) {
+        this.$indicatorIcon.textContent = icon;
+        this.$indicatorIcon.classList.remove('show');
+        // 强制重排触发动画重播
+        void this.$indicatorIcon.offsetWidth;
+        this.$indicatorIcon.classList.add('show');
+    }
+
+    /* ═══════════════════ 控制栏显示 / 自动隐藏 ═══════════════════ */
+    _showControls(delay = 3500) {
+        this.$topBar.classList.remove('hidden');
+        this.$controls.classList.remove('hidden');
+        this._clearControlsTimer();
+        this.controlsTimer = setTimeout(() => {
+            if (!this.isDraggingProgress) {
+                this.$topBar.classList.add('hidden');
+                this.$controls.classList.add('hidden');
+            }
+        }, delay);
+    }
+    _clearControlsTimer() {
+        clearTimeout(this.controlsTimer);
+    }
+
+    /* ═══════════════════ UI 更新 ═══════════════════ */
+    _updateUI() {
+        const total = this.videos.length;
+        const cur   = this.currentIdx + 1;
+        this.$counter.textContent = `${cur}/${total}`;
+        this.$title.textContent   = this.videos[this.currentIdx]?.name || '未知';
+        this.$progress.style.width = '0%';
+        this.$progressThumb.style.left = '0%';
+        this.$currentTime.textContent  = '0:00';
+        this.$totalTime.textContent    = '0:00';
+        this._updateMuteBtn();
+        this._updatePlayPauseBtn();
+    }
+
+    _hideEmptyState() {
+        this.$emptyState.style.display = 'none';
+    }
+
+    /* ═══════════════════ NAS 弹窗 ═══════════════════ */
+    _openNasModal() {
+        this.$nasModal.classList.remove('hidden');
+    }
+    _closeNasModal() {
+        this.$nasModal.classList.add('hidden');
+    }
+    _confirmNas() {
+        const single = document.getElementById('nasUrl').value.trim();
+        const multi  = document.getElementById('nasUrls').value.trim();
+
+        const urls = [];
+        if (single) urls.push(single);
+        multi.split('\n').forEach(line => {
+            const u = line.trim();
+            if (u && /^https?:\/\//i.test(u)) urls.push(u);
+        });
+
+        if (!urls.length) {
+            this._showError('请输入至少一个以 http 开头的视频地址');
+            return;
+        }
+
+        this._closeNasModal();
+        this._setPlaylist(urls.map(u => ({
+            name: this._urlToName(u),
+            url:  u,
+            isBlob: false
+        })));
+        this._playAt(0);
+    }
+
+    _urlToName(url) {
+        try {
+            const p = new URL(url).pathname;
+            return decodeURIComponent(p.split('/').filter(Boolean).pop() || url);
+        } catch {
+            return url;
+        }
+    }
+}
+
+/* ── 初始化 ── */
+document.addEventListener('DOMContentLoaded', () => {
+    window.__player = new VideoPlayer();
+
+    // 感知 Android Bridge（原生注入）
+    if (window.AndroidBridge) {
+        const ver = AndroidBridge.getAndroidVersion();
+        console.log('[VideoPlayer] Android SDK:', ver);
+        // Android 13+ 已有 READ_MEDIA_VIDEO，不需要旧权限提示
+    }
+});
+</script>
+</body>
+</html>

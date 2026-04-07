@@ -1,0 +1,47 @@
+# Android
+*.apk
+*.aab
+*.dex
+*.class
+*.jar
+*.log
+local.properties
+*.hprof
+.cxx/
+gen/
+bin/
+out/
+
+# Gradle
+.gradle/
+build/
+*/build/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+Thumbs.db
+.DS_Store
+desktop.ini
+
+# WorkBuddy (internal)
+.workbuddy/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Node (if any)
+node_modules/
+
+# Environment
+.env
