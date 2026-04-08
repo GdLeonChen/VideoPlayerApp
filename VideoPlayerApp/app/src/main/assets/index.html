@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="theme-color" content="#000000">
@@ -103,6 +103,12 @@
             overscroll-behavior: none;
             -webkit-font-smoothing: antialiased;
             -moz-osx-font-smoothing: grayscale;
+            /* 平板全屏关键：确保 html/body 填满整个屏幕 */
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
         }
 
         /* ── 播放器主容器 ── */
@@ -114,6 +120,11 @@
             justify-content: center;
             background: var(--color-surface-0);
             touch-action: none;
+            /* 平板全屏：确保内容区填充所有安全区域 */
+            width: 100vw;
+            height: 100vh;
+            width: 100dvw;
+            height: 100dvh;
         }
 
         /* ── 视频元素 ── */
@@ -122,6 +133,10 @@
             height: 100%;
             object-fit: contain;
             background: var(--color-surface-0);
+            /* 确保视频占满容器 */
+            position: absolute;
+            top: 0;
+            left: 0;
         }
 
         /* ── 顶部状态栏 ── */
@@ -736,8 +751,8 @@
 <div id="emptyState">
     <div class="icon">🎬</div>
     <h2>视频播放器</h2>
-    <p>选择本地视频文件夹，或输入局域网 / NAS 视频地址开始播放</p>
-    <p style="color:rgba(255,255,255,.3);font-size:12px;">支持 MP4 · MKV · MOV · WebM<br>上划切换下一个 · 下划切换上一个</p>
+    <p>选择本地视频文件夹，或连接 NAS 开始播放</p>
+    <p style="color:rgba(255,255,255,.3);font-size:12px;">支持 MP4 · MKV · MOV · WebM · AVI<br>上划切换下一个 · 下划切换上一个</p>
     <div id="emptyBtnRow">
         <button class="ctrl-btn primary" id="emptyFolderBtn">📁 选择本地视频</button>
         <button class="ctrl-btn" id="emptyNasBtn">🌐 局域网/NAS</button>
@@ -763,7 +778,7 @@
             </div>
         </div>
 
-        <div id="nasTip">支持：SMB/WebDAV/HTTP 目录浏览 · 群晖 · 群晖 WebDAV · Apache/Nginx 目录</div>
+        <div id="nasTip">支持：SMB/WebDAV/HTTP 目录浏览 · 群晖 · Apache/Nginx 目录</div>
 
         <div id="nasActionRow">
             <button id="nasCancelAction">取消</button>
@@ -773,7 +788,7 @@
 </div>
 
 <!-- 隐藏文件选择器（多选视频文件） -->
-<input type="file" id="fileInput" accept="video/*" multiple>
+<input type="file" id="fileInput" accept="video/*,audio/*,.mkv,.avi,.wmv,.rmvb,.rm,.flv,.ts,.mts,.m2ts,.mpg,.mpeg,.3gp" multiple>
 
 <!-- 错误提示条 -->
 <div id="errorToast"></div>
@@ -782,18 +797,8 @@
 'use strict';
 
 /* ═══════════════════════════════════════════════════════════
-   VideoPlayer v2.0
-   ─ 修复 / 增强项：
-   1. 静音状态独立管理，不随 play 事件强制变更
-   2. 进度条支持触摸拖拽（touchstart/touchmove/touchend）
-   3. 防止滑动切换误触 click 事件显示控制栏
-   4. 新增播放/暂停按钮 + 中央动效反馈
-   5. 新增时间显示（当前/总时长）
-   6. 新增视频加载中旋转指示器
-   7. 新增 error 事件处理 + Toast 错误提示
-   8. 双击左右区域快进/快退 10 秒
-   9. 支持 AndroidBridge 注入（原生 Android 版本感知）
-   10. 文件选择改为多文件模式（兼容 Android WebView）
+   VideoPlayer v3.2
+   ─ 基于 v3.1 移除百度网盘，修复 MKV 无声 + 平板全屏
 ═══════════════════════════════════════════════════════════ */
 
 class VideoPlayer {
@@ -822,18 +827,18 @@ class VideoPlayer {
         // 状态
         this.videos          = [];     // [{name, url, file, isBlob}]
         this.currentIdx      = 0;
-        this.isMuted         = true;   // 初始静音保证 autoplay 成功
+        this.isMuted         = false;  // 不再默认静音，优先保证有声音
         this.isPaused        = false;
         this.controlsTimer   = null;
         this.currentBlobUrl  = null;
         this.errorToastTimer = null;
-        this.isAnimating     = false;  // 防止动画期间重复切换
+        this.isAnimating     = false;
 
         // 触摸状态
         this.touchStartY    = 0;
         this.touchStartX    = 0;
         this.touchStartTime = 0;
-        this.didSwipe       = false;   // 标记本次 touch 是否触发了滑动
+        this.didSwipe       = false;
 
         // 进度条拖拽状态
         this.isDraggingProgress = false;
@@ -883,7 +888,7 @@ class VideoPlayer {
             this._toggleMute();
         });
 
-        // 进度条 — 点击 & 触摸拖拽
+        // 进度条
         this._bindProgressEvents();
 
         // 视频原生事件
@@ -903,11 +908,11 @@ class VideoPlayer {
         });
         this.$video.addEventListener('error',       () => this._onVideoError());
 
-        // 触摸手势（容器）
+        // 触摸手势
         this.$container.addEventListener('touchstart', e => this._onTouchStart(e), { passive: true });
         this.$container.addEventListener('touchend',   e => this._onTouchEnd(e),   { passive: true });
 
-        // 单击容器 → 显示控制栏 / 播放暂停（区分滑动）
+        // 单击
         this.$container.addEventListener('click', e => {
             if (this.didSwipe) { this.didSwipe = false; return; }
             this._handleTap(e);
@@ -916,24 +921,22 @@ class VideoPlayer {
         // NAS 弹窗防穿透
         this.$nasModal.addEventListener('touchmove', e => e.preventDefault(), { passive: false });
 
-        // 键盘快捷键（外接键盘）
+        // 键盘快捷键
         document.addEventListener('keydown', e => this._onKeyDown(e));
     }
 
-    /* ─── 进度条事件（click + touch drag） ─── */
+    /* ─── 进度条事件 ─── */
     _bindProgressEvents() {
-        // 鼠标点击
         this.$progressWrap.addEventListener('click', e => {
             if (!this.isDraggingProgress) this._seekByRatio(this._getRatioFromEvent(e));
         });
 
-        // 触摸拖拽
         this.$progressWrap.addEventListener('touchstart', e => {
-            e.stopPropagation();  // 不触发容器的滑动切换
+            e.stopPropagation();
             this.isDraggingProgress = true;
             this.$progressWrap.classList.add('dragging');
             this._seekByRatio(this._getRatioFromTouch(e.touches[0]));
-            this._clearControlsTimer();  // 拖拽期间不自动隐藏
+            this._clearControlsTimer();
         }, { passive: true });
 
         this.$progressWrap.addEventListener('touchmove', e => {
@@ -960,7 +963,6 @@ class VideoPlayer {
     _seekByRatio(ratio) {
         if (!this.$video.duration) return;
         this.$video.currentTime = ratio * this.$video.duration;
-        // 立即更新 UI，不等 timeupdate
         this._setProgressUI(ratio);
     }
     _setProgressUI(ratio) {
@@ -971,21 +973,21 @@ class VideoPlayer {
 
     /* ═══════════════════ 加载本地文件 ═══════════════════ */
     _loadLocalFiles(e) {
-        const SUPPORTED = ['.mp4', '.m4v', '.mov', '.mkv', '.webm', '.3gp', '.ts', '.m3u8', '.avi', '.wmv'];
+        const SUPPORTED = ['.mp4', '.m4v', '.mov', '.mkv', '.webm', '.3gp', '.ts', '.mts', '.m2ts',
+                          '.avi', '.wmv', '.flv', '.rmvb', '.rm', '.mpg', '.mpeg', '.ogg', '.ogv'];
         const files = Array.from(e.target.files).filter(f => {
             const ext = (f.name.match(/\.\w+$/) || [''])[0].toLowerCase();
-            return SUPPORTED.includes(ext);
+            const type = f.type || '';
+            return SUPPORTED.includes(ext) || type.startsWith('video/') || type.startsWith('audio/');
         });
 
-        // 重置 input，允许重复选同一路径
         e.target.value = '';
 
         if (!files.length) {
-            this._showError('未找到支持的视频文件\n支持：MP4、MKV、MOV、WebM、3GP 等');
+            this._showError('未找到支持的视频文件\n支持：MP4、MKV、MOV、WebM、AVI 等');
             return;
         }
 
-        // 按文件名自然排序（支持中文数字混排）
         files.sort((a, b) => a.name.localeCompare(b.name, 'zh-CN', { numeric: true, sensitivity: 'base' }));
 
         this._setPlaylist(files.map(f => ({
@@ -996,17 +998,15 @@ class VideoPlayer {
         this._playAt(0);
     }
 
-    /* ═══════════════════ 加载视频列表（Android Bridge 调用）════════════════════ */
+    /* ═══════════════════ 加载视频列表（Android Bridge）════════════════════ */
     loadVideoList(uris) {
         if (!uris || uris.length === 0) {
             this._showError('文件夹中没有找到视频文件');
             return;
         }
 
-        // 从 URI 中提取文件名
         const items = uris.map(uri => {
             const uriStr = uri.url || uri;
-            // 从 URI 路径中提取文件名
             const fileName = uriStr.split('/').pop().split('\\').pop() || '未知视频';
             return {
                 name: decodeURIComponent(fileName),
@@ -1015,7 +1015,6 @@ class VideoPlayer {
             };
         });
 
-        // 按文件名排序
         items.sort((a, b) => a.name.localeCompare(b.name, 'zh-CN', { numeric: true, sensitivity: 'base' }));
 
         this._setPlaylist(items);
@@ -1066,7 +1065,6 @@ class VideoPlayer {
         this.$video.load();
 
         this.$video.play().catch(err => {
-            // NotAllowedError 通常是自动播放限制，静默处理，等用户点击
             if (err.name !== 'NotAllowedError') {
                 this._showError('播放失败：' + err.message);
             }
@@ -1089,7 +1087,6 @@ class VideoPlayer {
     _playNext() {
         if (this.videos.length > 1) this._playAt(this.currentIdx + 1, 'down');
         else if (this.videos.length === 1) {
-            // 单视频循环
             this.$video.currentTime = 0;
             this.$video.play().catch(() => {});
         }
@@ -1100,7 +1097,6 @@ class VideoPlayer {
 
     /* ═══════════════════ 触摸手势 ═══════════════════ */
     _onTouchStart(e) {
-        // 进度条区域由自己处理，不触发切换
         if (e.target.closest('#progressWrap')) return;
         this.touchStartY    = e.touches[0].clientY;
         this.touchStartX    = e.touches[0].clientX;
@@ -1125,12 +1121,9 @@ class VideoPlayer {
         }
     }
 
-    /* ═══════════════════ 点击处理（单击/双击区分） ═══════════════════ */
+    /* ═══════════════════ 点击处理 ═══════════════════ */
     _handleTap(e) {
-        // 点击控制栏元素不触发
-        if (e.target.closest('#controls') || e.target.closest('#topBar')) {
-            return;
-        }
+        if (e.target.closest('#controls') || e.target.closest('#topBar')) return;
 
         const now = Date.now();
         const x   = e.clientX;
@@ -1138,7 +1131,6 @@ class VideoPlayer {
         const dx  = Math.abs(x - this.lastTapX);
 
         if (dt < 300 && dx < 60) {
-            // 双击：左 1/3 快退，右 1/3 快进，中间切换播放/暂停
             const w = window.innerWidth;
             if (x < w / 3) {
                 this._seek(-10);
@@ -1151,7 +1143,6 @@ class VideoPlayer {
             }
             this.lastTapTime = 0;
         } else {
-            // 单击：显示控制栏
             this.lastTapTime = now;
             this.lastTapX    = x;
             this._showControls();
@@ -1230,7 +1221,6 @@ class VideoPlayer {
             msg = codes[err.code] || msg;
         }
         this._showError(msg);
-        // 自动跳到下一个（3 秒后）
         if (this.videos.length > 1) {
             setTimeout(() => this._playNext(), 3000);
         }
@@ -1244,21 +1234,18 @@ class VideoPlayer {
         }, 4000);
     }
 
-    /* ═══════════════════ 加载指示器 ═══════════════════ */
     _showLoading(show) {
         this.$loading.classList.toggle('show', show);
     }
 
-    /* ═══════════════════ 中央动效指示器 ═══════════════════ */
     _showIndicator(icon) {
         this.$indicatorIcon.textContent = icon;
         this.$indicatorIcon.classList.remove('show');
-        // 强制重排触发动画重播
         void this.$indicatorIcon.offsetWidth;
         this.$indicatorIcon.classList.add('show');
     }
 
-    /* ═══════════════════ 控制栏显示 / 自动隐藏 ═══════════════════ */
+    /* ═══════════════════ 控制栏 ═══════════════════ */
     _showControls(delay = 3500) {
         this.$topBar.classList.remove('hidden');
         this.$controls.classList.remove('hidden');
@@ -1301,11 +1288,10 @@ class VideoPlayer {
         this.nasHistory = ['/'];
         this.nasHistoryIdx = 0;
         this._updateNasBreadcrumb();
-        this._renderNasFileList(null); // 显示空状态
+        this._renderNasFileList(null);
     }
     _closeNasModal() {
         this.$nasModal.classList.add('hidden');
-        // 取消所有进行中的请求
         if (this.nasAbortCtrl) {
             try { this.nasAbortCtrl.abort(); } catch(e) {}
             this.nasAbortCtrl = null;
@@ -1316,14 +1302,11 @@ class VideoPlayer {
         const addr = document.getElementById('nasAddress').value.trim();
         if (!addr) { this._showError('请输入服务器地址'); return; }
 
-        // 补全协议
         let baseUrl = addr;
         if (!/^https?:\/\//i.test(baseUrl)) {
             baseUrl = 'http://' + baseUrl;
             document.getElementById('nasAddress').value = baseUrl;
         }
-
-        // 移除末尾斜杠
         baseUrl = baseUrl.replace(/\/+$/, '');
 
         this.nasBaseUrl = baseUrl;
@@ -1339,11 +1322,9 @@ class VideoPlayer {
         this.nasCurrentPath = path;
         const url = this.nasBaseUrl + path;
 
-        // 显示加载中
         const $list = document.getElementById('nasFileList');
         $list.innerHTML = '<div id="nasLoading"><div class="nas-spinner"></div><p>正在加载...</p></div>';
 
-        // 取消之前的请求
         if (this.nasAbortCtrl) {
             try { this.nasAbortCtrl.abort(); } catch(e) {}
         }
@@ -1355,27 +1336,22 @@ class VideoPlayer {
                 headers: { 'Accept': 'text/html, application/json, */*' }
             });
 
-            if (!resp.ok) {
-                throw new Error(`HTTP ${resp.status}`);
-            }
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
 
             const contentType = resp.headers.get('content-type') || '';
 
             if (contentType.includes('application/json')) {
-                // JSON API 响应（Jellyfin/Emby 风格）
                 const data = await resp.json();
                 const items = this._parseJsonListing(data, url);
                 this._updateNasBreadcrumb();
                 this._renderNasFileList(items);
             } else {
-                // HTML 目录列表（Apache/Nginx/WebDAV）
                 const html = await resp.text();
                 const items = this._parseHtmlListing(html, url);
                 this._updateNasBreadcrumb();
                 this._renderNasFileList(items);
             }
 
-            // 更新历史
             this.nasHistory = this.nasHistory.slice(0, this.nasHistoryIdx + 1);
             this.nasHistory.push(path);
             this.nasHistoryIdx = this.nasHistory.length - 1;
@@ -1389,13 +1365,10 @@ class VideoPlayer {
         }
     }
 
-    /* 解析 Apache/Nginx 风格的 HTML 目录列表 */
     _parseHtmlListing(html, baseUrl) {
         const parser = new DOMParser();
         const doc = parser.parseFromString(html, 'text/html');
         const items = [];
-
-        // 尝试提取所有链接
         const links = doc.querySelectorAll('a[href]');
         const seen = new Set();
 
@@ -1406,18 +1379,14 @@ class VideoPlayer {
 
             let name = a.textContent.trim();
             if (!name || name.startsWith('?')) continue;
-
-            // 处理编码路径
             try { name = decodeURIComponent(name); } catch(e) {}
 
-            // 跳过重复
             const key = href + name;
             if (seen.has(key)) continue;
             seen.add(key);
 
             const isDir = href.endsWith('/') || a.closest('tr')?.querySelector('td')?.textContent?.match(/^\d{4}-\d{2}-\d{2}/) === null;
 
-            // 构建完整路径
             let fullPath;
             if (href.startsWith('http://') || href.startsWith('https://')) {
                 fullPath = href;
@@ -1425,63 +1394,15 @@ class VideoPlayer {
                 fullPath = baseUrl.replace(/\/+$/, '') + '/' + href.replace(/^\/+/, '');
             }
 
-            // 清理路径中的 ./ 和多余斜杠
             fullPath = fullPath.replace(/\/\.\//g, '/').replace(/\/+/g, '/');
             if (fullPath.endsWith('/')) fullPath = fullPath.slice(0, -1);
 
-            items.push({
-                name: name.replace(/\/$/, ''),
-                path: fullPath,
-                isDir: isDir,
-                size: 0
-            });
+            items.push({ name: name.replace(/\/$/, ''), path: fullPath, isDir: isDir, size: 0 });
         }
 
         return items.length > 0 ? items : null;
     }
 
-    /* 解析 WebDAV PROPFIND 响应 */
-    _parseWebDavListing(xmlText, baseUrl) {
-        try {
-            const parser = new DOMParser();
-            const doc = parser.parseFromString(xmlText, 'application/xml');
-            const responses = doc.querySelectorAll('response');
-            const items = [];
-
-            for (const resp of responses) {
-                const hrefEl = resp.querySelector('href');
-                if (!hrefEl) continue;
-
-                let href = hrefEl.textContent.trim();
-                try { href = decodeURIComponent(href); } catch(e) {}
-
-                if (href === baseUrl || href === baseUrl + '/') continue;
-
-                // 排除 . 和 ..
-                const name = href.split('/').filter(Boolean).pop();
-                if (!name || name === '.' || name === '..') continue;
-
-                const isDir = resp.querySelector('resourcetype collection') !== null
-                    || resp.querySelector('collection') !== null;
-
-                const contentEl = resp.querySelector('getcontentlength');
-                const size = contentEl ? parseInt(contentEl.textContent) || 0 : 0;
-
-                items.push({
-                    name,
-                    path: href,
-                    isDir,
-                    size
-                });
-            }
-
-            return items;
-        } catch(e) {
-            return null;
-        }
-    }
-
-    /* 解析 Jellyfin/Emby API 响应 */
     _parseJsonListing(data, baseUrl) {
         const items = [];
         const list = data.Items || data.items || (Array.isArray(data) ? data : []);
@@ -1490,13 +1411,11 @@ class VideoPlayer {
             const name = item.Name || item.name || '';
             const isDir = item.Type === 'Folder' || item.IsFolder || item.type === 'directory';
             const id = item.Id || item.id;
-            const mediaType = item.MediaType || item.mediaType || '';
 
             if (!name) continue;
 
             let path;
             if (id) {
-                // Jellyfin/Emby: 使用 API 路径
                 path = isDir
                     ? `${baseUrl.replace(/\/Items.*$/, '')}/Items?ParentId=${id}`
                     : `${baseUrl.replace(/\/Items.*$/, '')}/Items/${id}/File`;
@@ -1504,7 +1423,7 @@ class VideoPlayer {
                 path = item.Path || item.path || `${baseUrl}/${name}`;
             }
 
-            items.push({ name, path, isDir, size: item.Size || 0, mediaType });
+            items.push({ name, path, isDir, size: item.Size || 0 });
         }
 
         return items.length > 0 ? items : null;
@@ -1527,7 +1446,6 @@ class VideoPlayer {
         }
         $bc.innerHTML = html;
 
-        // 绑定面包屑点击
         $bc.querySelectorAll('.nas-crumb:not(.active)').forEach(el => {
             el.addEventListener('click', () => this._browseNas(el.dataset.path));
         });
@@ -1537,36 +1455,29 @@ class VideoPlayer {
         const $list = document.getElementById('nasFileList');
 
         if (!items) {
-            $list.innerHTML = `<div id="nasEmpty">
-                <div class="nas-empty-icon">📂</div>
-                <p>此目录为空或无法解析</p>
-            </div>`;
+            $list.innerHTML = `<div id="nasEmpty"><div class="nas-empty-icon">📂</div><p>此目录为空或无法解析</p></div>`;
             return;
         }
 
-        // 排序：文件夹在前，然后按名称排序
         items.sort((a, b) => {
             if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
             return a.name.localeCompare(b.name, 'zh-CN', { numeric: true, sensitivity: 'base' });
         });
 
         if (items.length === 0) {
-            $list.innerHTML = `<div id="nasEmpty">
-                <div class="nas-empty-icon">📂</div>
-                <p>此目录为空</p>
-            </div>`;
+            $list.innerHTML = `<div id="nasEmpty"><div class="nas-empty-icon">📂</div><p>此目录为空</p></div>`;
             return;
         }
 
-        const videoExts = ['.mp4', '.m4v', '.mov', '.mkv', '.webm', '.3gp', '.ts', '.avi', '.wmv', '.flv', '.rmvb', '.rm'];
+        const videoExts = ['.mp4', '.m4v', '.mov', '.mkv', '.webm', '.3gp', '.ts', '.mts', '.m2ts',
+                           '.avi', '.wmv', '.flv', '.rmvb', '.rm', '.mpg', '.mpeg', '.ogg', '.ogv'];
         const isVideo = (name) => {
             const ext = (name.match(/\.\w+$/) || [''])[0].toLowerCase();
-            return videoExts.includes(ext) || name.startsWith('.');
+            return videoExts.includes(ext);
         };
 
         let html = '';
 
-        // 非根目录时显示返回上级
         if (this.nasCurrentPath !== '/') {
             html += `<div class="nas-file-item" data-action="back">
                 <span class="nas-file-icon">⬆️</span>
@@ -1575,7 +1486,7 @@ class VideoPlayer {
         }
 
         for (const item of items) {
-            if (item.name.startsWith('.')) continue; // 跳过隐藏文件
+            if (item.name.startsWith('.')) continue;
 
             const isVid = isVideo(item.name);
             const icon = item.isDir ? '📁' : (isVid ? '🎬' : '📄');
@@ -1596,17 +1507,13 @@ class VideoPlayer {
             }
         }
 
-        if (!html || html === (this.nasCurrentPath !== '/' ? '' : '')) {
-            $list.innerHTML = `<div id="nasEmpty">
-                <div class="nas-empty-icon">📂</div>
-                <p>此目录中没有视频文件</p>
-            </div>`;
+        if (!html) {
+            $list.innerHTML = `<div id="nasEmpty"><div class="nas-empty-icon">📂</div><p>此目录中没有视频文件</p></div>`;
             return;
         }
 
         $list.innerHTML = html;
 
-        // 绑定点击事件
         $list.querySelectorAll('.nas-file-item').forEach(el => {
             el.addEventListener('click', () => {
                 const action = el.dataset.action;
@@ -1614,9 +1521,7 @@ class VideoPlayer {
                     const parent = this.nasCurrentPath.substring(0, this.nasCurrentPath.lastIndexOf('/')) || '/';
                     this._browseNas(parent);
                 } else if (action === 'open') {
-                    // 相对路径转绝对路径
-                    let dirPath = el.dataset.path;
-                    this._browseNas(dirPath);
+                    this._browseNas(el.dataset.path);
                 } else if (action === 'toggle') {
                     const path = el.dataset.path;
                     const name = el.dataset.name;
@@ -1643,12 +1548,9 @@ class VideoPlayer {
 
     _playNasSelected() {
         if (this.nasSelectedVideos.length === 0) return;
-
-        // 按文件名排序
         const items = [...this.nasSelectedVideos].sort((a, b) =>
             a.name.localeCompare(b.name, 'zh-CN', { numeric: true, sensitivity: 'base' })
         );
-
         this._closeNasModal();
         this._setPlaylist(items);
         this._playAt(0);
@@ -1665,11 +1567,9 @@ class VideoPlayer {
 document.addEventListener('DOMContentLoaded', () => {
     window.__player = new VideoPlayer();
 
-    // 感知 Android Bridge（原生注入）
     if (window.AndroidBridge) {
         const ver = AndroidBridge.getAndroidVersion();
         console.log('[VideoPlayer] Android SDK:', ver);
-        // Android 13+ 已有 READ_MEDIA_VIDEO，不需要旧权限提示
     }
 });
 </script>

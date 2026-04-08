@@ -10,8 +10,8 @@ android {
         applicationId "com.videoplayer.app"
         minSdk 21          // Android 5.0+，覆盖市面上 99% 设备
         targetSdk 34
-        versionCode 1
-        versionName "1.0"
+        versionCode 320
+        versionName "3.2"
     }
 
     buildTypes {
